@@ -1,0 +1,18 @@
+{
+  "name": "glm-free-api-token-collector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone token collector for chat.z.ai device tokens (Node.js port of cmd/token-collector)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "setup": "npx playwright install chromium"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "glm-free-api-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js port of GLM-Free-API: z.ai web chat exposed as OpenAI/Anthropic-compatible API",
+  "type": "module",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env main.js",
+    "test": "UPSTREAM_MIN_INTERVAL_MS=0 node --test \"tests/**/*.test.js\""
+  }
+}
