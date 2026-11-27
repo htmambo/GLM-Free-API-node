@@ -53,6 +53,7 @@ import { anthropicMessagesHandler } from './anthropic.js';
 import { captchaCache } from './captcha.js';
 import { initDB, closeDB } from './db.js';
 import { initializeSession, inspectZaiTokenExpiry } from './zai.js';
+import { reloadTokenFromFile } from './tokenFile.js';
 import { ensureToolParserLLMForUltra, toolParserLLMSGLangBaseURL } from './toolparserLLM.js';
 import { ultraGateDebug } from './agentUltra.js';
 import { fetchModelsFromZAI } from './models.js';
@@ -280,6 +281,10 @@ export async function run() {
     config.forceCPU = args.forceCPU;
     config.syncMode = args.syncMode;
     config.sessionReuseCount = args.sessionReuseCount;
+
+    // ZAI_TOKEN_FILE (when configured) wins over the environment variable, so
+    // apply it before the expiry warning and before the first session init.
+    reloadTokenFromFile({ force: true });
 
     // Warn (do NOT exit) when the captcha credentials are missing: they are
     // only needed to sign the captcha param on the chat path, so the rest of

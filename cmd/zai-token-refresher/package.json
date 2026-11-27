@@ -1,0 +1,17 @@
+{
+  "name": "glm-free-api-token-refresher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keeps the ZAI_TOKEN_FILE consumed by the bridge fresh by reading localStorage.token from a persistent browser profile",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

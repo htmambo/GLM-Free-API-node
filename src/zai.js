@@ -34,6 +34,7 @@
 
 import { BASE_URL, zaiUserAgent, zaiRegion, config } from './config.js';
 import { session, feVersionRe } from './state.js';
+import { reloadTokenFromFile } from './tokenFile.js';
 import { generateZaSignature, base64Decode, randomUUID } from './util.js';
 import {
     checkWAF,
@@ -241,6 +242,10 @@ export function initializeSession() {
 }
 
 async function doInitializeSession() {
+    // A refresher may have rotated the token file since startup — pick it up
+    // before config.zaiToken is copied into the session below.
+    reloadTokenFromFile();
+
     // Scrape the deployed web build in BOTH paths: the x-fe-Version header
     // has to match the build the upstream is currently serving, and the
     // upstream answers a stale version with a bare 500. The guest path used
@@ -463,10 +468,16 @@ export async function* sendToZAI(prompt, opts = {}) {
     // conditions on Z.AI's side, so the request is retried with another
     // model instead of failing outright. The swap is logged so the caller
     // can see which model actually answered.
+    //
+    // Every model in the catalogue is tried in turn (Flash first, since it
+    // is the one every account tier can reach): a 403 on one model says
+    // nothing about the next one, and a directory-wide outage means the
+    // request fails with the upstream's own message rather than a guess.
     const clientNamedModel = typeof opts.model === 'string' && opts.model.trim() !== '';
-    let attempts = 0;
+    const tried = new Set([model]);
     let activeModel = model;
     let activeFeatures = featuresMap;
+    let lastFailure = null;
 
     for (;;) {
         let capacityFailure = null;
@@ -481,17 +492,17 @@ export async function* sendToZAI(prompt, opts = {}) {
         }
 
         if (capacityFailure === null) return;
+        lastFailure = capacityFailure;
 
-        attempts++;
+        // The next model in the catalogue that has not been tried yet.
         const alternatives = await fallbackModelsFor(activeModel);
-        // One retry is enough: the catalogue is small and every model of a
-        // deployment shares the same tier rules.
-        if (attempts > 1 || alternatives.length === 0) {
-            yield { chunk: '', fullText: '', reasoning: '', error: capacityFailure };
+        const next = alternatives.find((id) => !tried.has(id));
+        if (next === undefined) {
+            yield { chunk: '', fullText: '', reasoning: '', error: lastFailure };
             return;
         }
+        tried.add(next);
 
-        const next = alternatives[0];
         logInfo(
             `[Model] ${activeModel} is unavailable upstream (${capacityFailure.message.slice(0, 120)}) — ` +
             `retrying with ${next}` + (clientNamedModel ? ' (client-requested model was substituted)' : ''));
@@ -653,16 +664,32 @@ async function* sendToZAIStream(prompt, opts) {
 
         if (resp.status === 401) {
             await resp.text(); // drain before reuse
-            // A hardcoded ZAI_TOKEN cannot be refreshed: re-initializing
-            // re-applies the same rejected token, burns the second attempt,
-            // and ends in a useless "Max retries exceeded".
             if (config.zaiToken !== '') {
+                // The token may have been rotated out of band by the refresher
+                // (ZAI_TOKEN_FILE). Re-read the file, but only an actual
+                // content change earns the retry — re-initializing with the
+                // same rejected token would just burn the second attempt and
+                // end in a useless "Max retries exceeded".
+                if (reloadTokenFromFile({ force: true })) {
+                    session.initialized = false;
+                    try {
+                        await initializeSession();
+                    } catch (err) {
+                        yield { chunk: '', fullText: '', reasoning: '', error: err };
+                        return;
+                    }
+                    continue;
+                }
                 yield {
                     chunk: '', fullText: '', reasoning: '',
                     error: new Error(
                         `Z.AI 401 Unauthorized: ZAI_TOKEN was rejected by ${BASE_URL}. ` +
                         `The token must belong to that site (set ZAI_BASE_URL=https://zchat.z.ai ` +
-                        'for the mainland site) and must not be expired.'),
+                        'for the mainland site) and must not be expired.' +
+                        (config.zaiTokenFile !== ''
+                            ? ' ZAI_TOKEN_FILE is configured — check that the refresher is' +
+                              ' running and that its browser session is still logged in.'
+                            : '')),
                 };
                 return;
             }

@@ -132,6 +132,9 @@ export function loadConfig() {
         auth: { enabled: true, token: 'Waguri' },
         timeouts: { default: 300000 },
         zaiToken: '',
+        // zaiTokenFile is the ZAI_TOKEN_FILE path ('' = not configured). When
+        // set, its contents override zaiToken and are re-read at runtime.
+        zaiTokenFile: '',
         agentMode: false,
         // AgentModeVariant selects the agent-mode compatibility shim:
         //   "modern" (default) — XML-sectioned prompt shim ported from
@@ -188,6 +191,11 @@ export function loadConfig() {
         if (n !== null) c.timeouts.default = n;
     }
     if (env.ZAI_TOKEN) c.zaiToken = env.ZAI_TOKEN;
+    // ZAI_TOKEN_FILE names a token file written by an external refresher
+    // (cmd/zai-token-refresher). When set it takes precedence over
+    // ZAI_TOKEN, and the bridge re-reads it at startup and on 401 — see
+    // tokenFile.js. Relative paths resolve against the process cwd.
+    if (env.ZAI_TOKEN_FILE) c.zaiTokenFile = env.ZAI_TOKEN_FILE.trim();
     if (env.AGENT_MODE) {
         switch (env.AGENT_MODE.toLowerCase()) {
             case '1':

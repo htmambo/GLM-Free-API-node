@@ -21,6 +21,10 @@ tokens.sqlite-shm
 session.json
 *-session.json
 
+# Token file + browser profile written by cmd/zai-token-refresher (secrets)
+runtime/
+cmd/zai-token-refresher/.profile/
+
 # ---------------------------------------------------------------------------
 # Environment / secrets
 # ---------------------------------------------------------------------------
