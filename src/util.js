@@ -20,7 +20,7 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { session } from './state.js';
-import { clientVersion, zaiUserAgent } from './config.js';
+import { clientVersion, zaiUserAgent, BASE_URL } from './config.js';
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -285,6 +285,16 @@ export function generateZaSignature(prompt, token, userID) {
 // here are the equivalent static ones for the bridge's own fingerprint.
 export function fingerprintParams(token) {
     const now = new Date();
+    // The fingerprint describes the site the request goes to, so every
+    // host-ish value is derived from BASE_URL rather than hardcoded.
+    let origin = 'https://chat.z.ai';
+    let host = 'chat.z.ai';
+    try {
+        origin = new URL(BASE_URL).origin;
+        host = new URL(BASE_URL).hostname;
+    } catch {
+        /* keep the defaults */
+    }
     return {
         version: clientVersion,
         platform: 'web',
@@ -294,31 +304,33 @@ export function fingerprintParams(token) {
         // header) reads as a spoofed client.
         user_agent: zaiUserAgent,
         language: 'en-US',
-        languages: 'en-US,en',
+        languages: 'en-US',
         timezone: 'Asia/Shanghai',
         cookie_enabled: 'true',
-        screen_width: '1920',
-        screen_height: '1080',
-        screen_resolution: '1920x1080',
-        viewport_height: '1080',
-        viewport_width: '1920',
-        viewport_size: '1920x1080',
+        screen_width: '1440',
+        screen_height: '900',
+        screen_resolution: '1440x900',
+        viewport_height: '900',
+        viewport_width: '1440',
+        viewport_size: '1440x900',
         color_depth: '24',
         pixel_ratio: '1',
-        current_url: 'https://chat.z.ai/chat',
+        current_url: origin + '/chat',
         pathname: '/chat',
         search: '',
         hash: '',
-        host: 'chat.z.ai',
-        hostname: 'chat.z.ai',
+        host,
+        hostname: host,
         protocol: 'https:',
-        referrer: 'https://chat.z.ai/',
-        title: 'Z.ai - Advanced AI Chatbot & Agent powered by GLM-5.3-Flash',
+        referrer: '',
+        title: 'New Chat | Z.ai - Advanced AI Chatbot & Agent powered by GLM',
         timezone_offset: '-480',
-        local_time: now.toLocaleString(),
+        local_time: now.toISOString(),
         utc_time: now.toUTCString(),
         is_mobile: 'false',
         is_touch: 'false',
         max_touch_points: '0',
+        browser_name: 'Chrome',
+        os_name: 'Mac OS',
     };
 }

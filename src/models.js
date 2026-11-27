@@ -103,6 +103,52 @@ export async function getModelCapabilities(modelID) {
     return null;
 }
 
+// resolveModelID maps the model id a client asked for onto an id the
+// upstream actually serves.
+//
+// The upstream rejects an unknown model with a bare "500 Internal Server
+// Error", so a stale or generic id ("glm-5", "gpt-4o", …) would surface as
+// an opaque server fault instead of a working completion. Z.AI's model
+// catalogue also changes over time — the deployment this bridge talks to
+// currently serves glm-5.4 / glm-5.3 / glm-5.2 / x-preview-l, and the next
+// release may drop one of them.
+//
+// Resolution order:
+//   1. An exact match (case-insensitive) in the live model list wins.
+//   2. A configured override (ZAI_MODEL) is used when the client did not
+//      name a model, or named one that no longer exists.
+//   3. Otherwise the first model the upstream lists is used — the list is
+//      newest-first, so that is the current flagship.
+//
+// `resolved` reports whether the client's own request was honoured; a false
+// means the id was substituted and the caller should say so.
+export async function resolveModelID(requested) {
+    const wanted = typeof requested === 'string' ? requested.trim() : '';
+    const models = await fetchModelsFromZAI();
+    const ids = models.map((m) => m.id).filter((id) => typeof id === 'string' && id !== '');
+
+    // 1. The requested model is served upstream — keep it (case-insensitive).
+    if (wanted !== '') {
+        const hit = ids.find((id) => id.toLowerCase() === wanted.toLowerCase());
+        if (hit !== undefined) {
+            return { model: hit, resolved: true, requested: wanted };
+        }
+    }
+
+    // 2. Configured override, when it is still a live model.
+    const override = (process.env.ZAI_MODEL || '').trim();
+    if (override !== '') {
+        const hit = ids.find((id) => id.toLowerCase() === override.toLowerCase());
+        if (hit !== undefined) {
+            return { model: hit, resolved: false, requested: wanted };
+        }
+    }
+
+    // 3. Fall back to the newest model the upstream lists.
+    const fallback = ids.length > 0 ? ids[0] : 'glm-5.2';
+    return { model: fallback, resolved: false, requested: wanted };
+}
+
 // modelSupportsReasoningEffort returns true only when the model's capabilities
 // JSON explicitly contains "reasoning_effort": true.
 // Models with "reasoning_effort": false or without the field are NOT supported.

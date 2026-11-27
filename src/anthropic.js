@@ -10,12 +10,12 @@
 
 import { config } from './config.js';
 import { generateID, messagesToPrompt, estimateTokens } from './util.js';
-import { logError } from './logger.js';
+import { logError, logInfo } from './logger.js';
 import { writeJSON } from './middleware.js';
 import { rejectIfWAFBlocked } from './waf.js';
 import { sendToZAI, statusFromError } from './zai.js';
 import { acquireStatelessSession, releaseStatelessSession } from './sessionPool.js';
-import { modelSupportsVision } from './models.js';
+import { modelSupportsVision, resolveModelID } from './models.js';
 import { processVisionMessages } from './vision.js';
 import {
     agentTransformMessages,
@@ -271,7 +271,18 @@ export async function anthropicMessagesHandler(req, res, ctx) {
         anthReq = JSON.parse(bodyStr);
     } catch { /* body already parsed above; unreachable */ }
 
-    const model = body.model || 'glm-5';
+    // Same model resolution as the OpenAI route: an unknown id would come
+    // back from the upstream as a bare "500 Internal Server Error".
+    let model = body.model || '';
+    {
+        const { model: resolved, resolved: exact, requested } = await resolveModelID(model);
+        if (!exact) {
+            logInfo(
+                `[Model] requested=${JSON.stringify(requested)} is not served by the upstream; ` +
+                `using ${resolved} instead`);
+        }
+        model = resolved;
+    }
 
     let messages = Array.isArray(body.messages) ? body.messages : null;
     if (messages === null || messages.length === 0) {

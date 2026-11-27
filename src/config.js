@@ -63,7 +63,23 @@ if (envBaseURL !== '') BASE_URL = envBaseURL;
 
 // zaiRegion is the x-region header value. The international site expects
 // "overseas"; a mainland deployment may expect another value (ZAI_REGION).
-export const zaiRegion = (process.env.ZAI_REGION || '').trim() || 'overseas';
+// zaiRegion is the x-region request header value. The web client sends
+// "overseas" for the international site and "domestic" for every other
+// deployment (zchat.z.ai). Sending the wrong region is rejected by the
+// upstream, so it follows BASE_URL instead of defaulting blindly.
+// Override with ZAI_REGION.
+export const zaiRegion = (process.env.ZAI_REGION || '').trim() || defaultRegion(BASE_URL);
+
+// defaultRegion mirrors the web client's deployment split.
+export function defaultRegion(baseURL) {
+    let host = '';
+    try {
+        host = new URL(baseURL).hostname;
+    } catch {
+        host = '';
+    }
+    return host === 'chat.z.ai' ? 'overseas' : 'domestic';
+}
 
 // sceneID is the Aliyun captcha scene. The web client picks it by hostname
 // (verified in the prod bundle):

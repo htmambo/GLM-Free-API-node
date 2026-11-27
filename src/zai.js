@@ -48,7 +48,7 @@ import { logInfo, logError, logDebug } from './logger.js';
 import { zaiFetch } from './httpClient.js';
 import { getCaptchaVerifyParam } from './captcha.js';
 import { resolveFeaturesForModel } from './features.js';
-import { modelSupportsReasoningEffort, isValidReasoningEffort } from './models.js';
+import { modelSupportsReasoningEffort, isValidReasoningEffort, resolveModelID } from './models.js';
 
 // ============================================================================
 // JWT DECODE
@@ -148,10 +148,20 @@ export function buildChatRequestBody({
         features,
         // Containers the web client always sends (possibly empty).
         params: {},
-        variables: {},
+        variables: buildPromptVariables(),
         extra: {},
         session_id: chatID,
     };
+
+    // The web client asks the upstream to derive a title and tags for a
+    // brand-new conversation (one user turn, or a system + user turn).
+    const isFreshConversation = messageList.length === 1
+        || (messageList.length === 2
+            && messageList[0]?.role === 'system'
+            && messageList[1]?.role === 'user');
+    if (isFreshConversation) {
+        body.background_tasks = { title_generation: true, tags_generation: true };
+    }
 
     // Attach uploaded files (images) only when present — text-only
     // requests keep the exact body shape they always had.
@@ -165,6 +175,25 @@ export function buildChatRequestBody({
     }
 
     return body;
+}
+
+// buildPromptVariables fills the {{...}} placeholders the web client
+// substitutes into its prompts (see the captured prod request). The
+// upstream expects the object to be present; the values describe the
+// signed-in user and the local clock.
+export function buildPromptVariables(now = new Date()) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return {
+        '{{USER_NAME}}': session.userName || 'User',
+        '{{USER_LOCATION}}': 'Unknown',
+        '{{CURRENT_DATETIME}}': `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
+            + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+        '{{CURRENT_DATE}}': `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+        '{{CURRENT_TIME}}': `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+        '{{CURRENT_WEEKDAY}}': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()],
+        '{{CURRENT_TIMEZONE}}': 'Asia/Shanghai',
+        '{{USER_LANGUAGE}}': 'en-US',
+    };
 }
 
 // ============================================================================
@@ -326,7 +355,9 @@ async function doInitializeSession() {
 //   { model, webSearch, thinking, imageGen, previewMode, chatID, messages,
 //     clientMessagesRaw, reasoningEffort, files }
 export async function* sendToZAI(prompt, opts = {}) {
-    const model = opts.model || 'glm-5';
+    // An unknown model id comes back from the upstream as a bare "500
+    // Internal Server Error", so resolve it against the live catalogue.
+    const { model } = await resolveModelID(opts.model || '');
 
     // Resolve features dynamically from per-model state
     // (server defaults + stored user overrides)
@@ -480,11 +511,27 @@ async function* sendToZAIStream(prompt, opts) {
         const featuresPayload = { ...opts.featuresMap };
         // Remove 'think' entirely — only enable_thinking reaches the request
         delete featuresPayload.think;
-        featuresPayload.flags = [];
+        // The web client always sends the full feature set, including the
+        // ones that are switched off (see the captured prod request):
+        // preview_mode, auto_web_search and the three vlm_* switches.
+        featuresPayload.flags = ['general_agent'];
         // image_generation is ALWAYS false; web_search never enables search
         // upstream (auto_web_search is the only working switch, issue #42).
         featuresPayload.image_generation = false;
         featuresPayload.web_search = false;
+        featuresPayload.preview_mode = featuresPayload.preview_mode === true;
+        // auto_web_search: the web client always sends the switch, but agent
+        // mode removes it entirely so the upstream never starts a search
+        // (the agent shim's tool contract and Z.AI's internal search loop
+        // conflict — see the agent-mode guard above).
+        if (config.agentMode) {
+            delete featuresPayload.auto_web_search;
+        } else {
+            featuresPayload.auto_web_search = featuresPayload.auto_web_search === true;
+        }
+        featuresPayload.vlm_tools_enable = false;
+        featuresPayload.vlm_web_search_enable = false;
+        featuresPayload.vlm_website_mode = false;
 
         const requestBody = buildChatRequestBody({
             model: opts.model,

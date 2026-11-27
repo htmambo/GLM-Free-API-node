@@ -23,7 +23,7 @@
 import { config } from './config.js';
 import { session, setModelsCache } from './state.js';
 import { generateID, messagesToPrompt, estimateTokens } from './util.js';
-import { logError } from './logger.js';
+import { logError, logInfo } from './logger.js';
 import { writeJSON, writeError, writeNotFound, toJSON } from './middleware.js';
 import { rejectIfWAFBlocked, wafStatus } from './waf.js';
 import { tokenCount, swapDB } from './db.js';
@@ -34,7 +34,7 @@ import {
     releaseStatelessSession,
     sessionPoolStatus,
 } from './sessionPool.js';
-import { buildModelsListResponse, buildModelsSimpleResponse, modelSupportsVision } from './models.js';
+import { buildModelsListResponse, buildModelsSimpleResponse, modelSupportsVision, resolveModelID } from './models.js';
 import { getFeaturesResponse, applyFeatureOverrides } from './features.js';
 import { processVisionMessages } from './vision.js';
 import {
@@ -228,7 +228,19 @@ export async function chatCompletionsHandler(req, res, ctx) {
         return;
     }
 
-    let model = body.model || 'glm-5';
+    // The upstream answers an unknown model id with a bare "500 Internal
+    // Server Error", so resolve the requested id against the live catalogue
+    // up front: an exact match wins, otherwise the current flagship is used.
+    let model = body.model || '';
+    {
+        const { model: resolved, resolved: exact, requested } = await resolveModelID(model);
+        if (!exact) {
+            logInfo(
+                `[Model] requested=${JSON.stringify(requested)} is not served by the upstream; ` +
+                `using ${resolved} instead`);
+        }
+        model = resolved;
+    }
 
     let messages = Array.isArray(body.messages) ? body.messages : null;
     if (messages === null || messages.length === 0) {
