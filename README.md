@@ -433,12 +433,16 @@ Z.AI 的会话 token 是**约 60 分钟**有效期的 JWT。过期后所有聊�
 cd cmd/zai-token-refresher
 npm install
 npx playwright install chromium
-node index.js                 # 首次：在弹出的窗口里手动登录
+npm start                     # 首次：在弹出的窗口里手动登录
 
-# .env
+# 项目根 .env
 ZAI_TOKEN_FILE=runtime/zai-token
 ```
 
+- `npm start` 会加载仓库根目录的 `.env`，因此 `ZAI_BASE_URL` 与桥接器保持一致。
+  直接 `node index.js` 时可用 `--base-url https://zchat.z.ai` 指定国内站。
+- **token 必须由桥接器实际访问的站点签发**：国内站（`zchat.z.ai`）签发的 token
+  在 `chat.z.ai` 上会被拒绝，反之亦然。
 - `ZAI_TOKEN_FILE` 优先于 `ZAI_TOKEN`；文件缺失、为空、过期或损坏时**不会**覆盖仍有效的值。
 - 401 时只有文件内容确实变化才会重建会话并重试一次，不会凭同一个失效 token 空转。
 - 登录态本身有效期是数天到数周，到期后仍需在窗口中重登一次——无法做到完全无人值守。

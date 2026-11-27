@@ -20,11 +20,18 @@ npx playwright install chromium     # skip if token-collector already did it
 ## Usage
 
 ```sh
-node index.js                       # first run: log in in the window that opens
+npm start                           # loads the repo-root .env (incl. ZAI_BASE_URL)
+node index.js                       # same, but without .env — defaults to chat.z.ai
 node index.js --interval 900        # refresh every 15 minutes (default)
 node index.js --headless            # already-authenticated profile only
+node index.js --base-url https://zchat.z.ai   # mainland site
 node index.js --out /path/to/token  # override the output path
 ```
+
+**The token must be issued by the same site the bridge talks to.** If the
+bridge's `ZAI_BASE_URL` is `https://zchat.z.ai`, either use `npm start` (which
+reads the repo-root `.env`) or pass `--base-url https://zchat.z.ai` — a token
+from `chat.z.ai` will be rejected by the mainland deployment.
 
 The profile defaults to `.profile` next to this file, and the token to
 `<repo>/runtime/zai-token` — the same path the bridge's `ZAI_TOKEN_FILE`

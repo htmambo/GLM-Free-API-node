@@ -83,7 +83,7 @@ README 已记录（§常见问题）：纯 bearer token 无法续期——`POST 
 | 1. 未设置 `ZAI_TOKEN_FILE` 时行为不变 | ✅ 启动输出与改动前一致（仅保留原有 token 过期告警） |
 | 2. 文件变化无需重启 | ✅ 单元测试 + 401 集成测试（新 token 用于第二次请求） |
 | 3. 过期/损坏文件不覆盖有效 token | ✅ 启动用例 2 与单元测试均验证，并打印明确警告 |
-| 4. 刷新器可运行 | ✅ CLI、参数校验、默认路径解析已验证；真实登录读取需首次在有显示环境执行（本机未安装 Playwright 依赖，未做浏览器实测） |
+| 4. 刷新器可运行 | ✅ 实测通过：持久 profile 保留登录态，headless 从 `zchat.z.ai` 读到同一账号（id/email 与环境 token 一致）的新 token 并写入 `runtime/zai-token` |
 | 5. 根依赖不变、测试全绿 | ✅ 根 `package.json` 未新增依赖；`npm test` 209 通过 |
 
 补充验证：401 且文件内容未变化时**不重试**，直接返回可操作的错误（含 refresher 状态提示）。
@@ -101,6 +101,8 @@ ZAI_TOKEN_FILE=runtime/zai-token
 
 ## 备注
 
+- 国内站：`npm start` 会加载仓库根 `.env`（含 `ZAI_BASE_URL=https://zchat.z.ai`）；
+  直接 `node index.js` 时用 `--base-url https://zchat.z.ai`。token 必须与桥接器访问的站点一致。
 - 登录态（cookie）本身会过期，届时刷新器日志会提示无 token；重新 headful 登录即可。
 - 刷新的 token 只有在**内容确实变化且未过期**时才会覆盖，桥接器不会因刷新器故障而丢失当前可用 token。
 - 实施期间外部 Review MCP 不可用（coding-bridge 429 / codex 连接失败），本次未经外部审查，见上节记录。

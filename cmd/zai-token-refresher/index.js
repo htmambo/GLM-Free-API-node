@@ -28,7 +28,6 @@ const DEFAULTS = {
     loginTimeout: 600,
 };
 
-const BASE_URL = (process.env.ZAI_BASE_URL || 'https://chat.z.ai').trim().replace(/\/+$/, '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function usage() {
@@ -38,10 +37,14 @@ function usage() {
   --out <file>         Token output file (default ${DEFAULTS.out})
   --interval <sec>     Refresh interval, 0 = once then exit (default ${DEFAULTS.interval})
   --login-timeout <s>  How long to wait for a manual login (default ${DEFAULTS.loginTimeout})
+  --base-url <url>     Site to log in to and read the token from
+                       (default $ZAI_BASE_URL, else https://chat.z.ai)
+                       Mainland site: --base-url https://zchat.z.ai
   --headless           Run without a window (needs an already-authenticated profile)
   -h, --help           Show this help
 
-The bridge reads the file when ZAI_TOKEN_FILE points at it.
+The bridge reads the file when ZAI_TOKEN_FILE points at it. The token must be
+issued by the same site the bridge talks to (ZAI_BASE_URL).
 `);
 }
 
@@ -61,6 +64,7 @@ function parseArgs(argv) {
             case '--out': args.out = take(i, a); i++; break;
             case '--interval': args.interval = Number(take(i, a)); i++; break;
             case '--login-timeout': args.loginTimeout = Number(take(i, a)); i++; break;
+            case '--base-url': args.baseUrl = take(i, a); i++; break;
             case '--headless': args.headless = true; break;
             case '-h':
             case '--help': usage(); process.exit(0);
@@ -82,6 +86,10 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv.slice(2));
 const profileDir = resolve(args.profile);
 const outFile = resolve(args.out);
+// Precedence: --base-url > ZAI_BASE_URL > international default. The token has
+// to come from the same deployment the bridge talks to.
+const BASE_URL = (args.baseUrl || process.env.ZAI_BASE_URL || 'https://chat.z.ai')
+    .trim().replace(/\/+$/, '');
 
 function log(msg) {
     process.stdout.write(`[${new Date().toISOString()}] ${msg}\n`);
@@ -182,11 +190,15 @@ async function main() {
         args: ['--disable-blink-features=AutomationControlled'],
     });
 
-    process.on('SIGINT', async () => {
-        log('Shutting down.');
-        await context.close().catch(() => {});
-        process.exit(0);
-    });
+    // Process managers stop the tool with SIGTERM; Ctrl-C sends SIGINT. Close
+    // the browser either way so the profile is not left locked.
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+        process.on(signal, async () => {
+            log('Shutting down.');
+            await context.close().catch(() => {});
+            process.exit(0);
+        });
+    }
 
     try {
         const page = context.pages()[0] ?? await context.newPage();
