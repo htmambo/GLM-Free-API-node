@@ -122,7 +122,7 @@ curl http://localhost:3001/v1/chat/completions \
   -H "Authorization: Bearer Waguri" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "glm-5",
+    "model": "glm-5.2",
     "stream": false,
     "messages": [{"role": "user", "content": "用一句话介绍你自己"}]
   }'
@@ -135,7 +135,7 @@ curl http://localhost:3001/v1/messages \
   -H "x-api-key: Waguri" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "glm-5",
+    "model": "glm-5.2",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "你好"}]
   }'
@@ -253,9 +253,11 @@ curl -X POST http://localhost:3001/sqlite \
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `ZAI_BASE_URL` | `https://chat.z.ai` | 上游站点地址。境内部署可设为 `https://zchat.z.ai` |
-| `ZAI_REGION` | `overseas` | `x-region` 请求头取值 |
+| `ZAI_REGION` | 按站点推导 | `x-region` 请求头取值。`chat.z.ai` 推导为 `overseas`，其余（如 `zchat.z.ai`）为 `domestic` |
 | `ZAI_TOKEN` | 空 | **强烈建议配置**：登录用户的 token。游客会话随时可能因上游策略变动而返回 401，配置后可用性与配额都更稳定 |
-| `ZAI_CLIENT_VERSION` | `1.0.91` | 上游 `version` 查询参数。上游会拒绝低于最低版本的请求（报 `Your client version is outdated`），门槛抬高时用这个覆盖 |
+| `ZAI_TOKEN_FILE` | 空 | token 文件路径。设置后其内容优先于 `ZAI_TOKEN`，并在启动与 401 重试时重新读取（配合 `cmd/zai-token-refresher` 实现自动续期） |
+| `ZAI_MODEL` | 空 | 固定使用的模型 id。留空时按上游 `/api/models` 实时目录解析 |
+| `ZAI_CLIENT_VERSION` | `0.0.1` | 上游 `version` 查询参数。取线上 web 客户端实际发送的值；上游会拒绝过低的版本 |
 | `UPSTREAM_MIN_INTERVAL_MS` | 随机 `200–500` | 上游请求最小间隔（毫秒）。`0` 关闭限速 |
 | `TOKEN_COUNT_TTL_MS` | `1000` | `/health` 中 token 计数的缓存时长 |
 
@@ -325,7 +327,7 @@ node main.js --agent-mode --agent-mode-variant modern
 
 ```jsonc
 {
-  "model": "glm-5",
+  "model": "glm-5.2",
   "webSearch": true,        // → 上游 auto_web_search
   "advancedSearch": false   // → 挂载 advanced-search MCP
 }
@@ -333,13 +335,34 @@ node main.js --agent-mode --agent-mode-variant modern
 
 > Agent 模式下两个开关会被强制关闭 —— 工具调用与搜索同时开启会显著降低成功率。
 
+### 模型解析与降级
+
+上游对**未知 model id** 的回答是裸 `500 Internal Server Error`，和"请求体字段不对"的报错完全一样，无法区分。而模型目录是会变的：部署站点当前提供 `glm-5.4` / `x-preview-l` / `glm-5.3` / `glm-5.2`，而旧客户端习惯的 `glm-5` 并不在其中。
+
+因此桥接器在发送前先按**上游实时目录**（`GET /api/models`）解析 model id：
+
+| 情况 | 行为 |
+|---|---|
+| 客户端指定的模型在目录中 | 原样使用（大小写不敏感） |
+| 客户端未指定模型 | 使用 `x-preview-l`（Flash）—— 旗舰模型对付费档生效，免费账号会收到 `Model not available for current user level` |
+| 客户端指定的模型已下线 | 回落到目录中最易获得的模型，日志记录替换 |
+| 需要固定模型 | 设置 `ZAI_MODEL` |
+
+此外，上游的三种服务端状态会触发**自动换模型重试一次**（日志中会记录替换过程）：
+
+- `MODEL_CONCURRENCY_LIMIT` —— 模型满载，稍后重试即可
+- `403 Model not available for current user level` —— 模型对付费档生效
+- `INTERNAL_ERROR` —— 上游自身的临时故障（实测线上原样请求同样会命中）
+
+当这些状态无法通过降级解决时，桥接器返回 **503**（可重试）而不是 500 —— 这些故障不在客户端，请求本身没有问题，值得稍后重试。
+
 ### 视觉能力
 
-`/v1/chat/completions` 与 `/v1/messages` 均可携带图片：
+`/v1/chat/completions` 与 `/v1/messages` 均可携带图片（需选用支持视觉的模型，如 `glm-5.4`；实际可用模型以 `GET /v1/models` 为准）：
 
 ```jsonc
 {
-  "model": "glm-5v-turbo",
+  "model": "glm-5.4",
   "messages": [{
     "role": "user",
     "content": [
@@ -399,8 +422,42 @@ Z.AI 的会话 token 是**约 60 分钟**有效期的 JWT。过期后所有聊�
 > **无法用纯 bearer token 自动续期。** 上游已转向 `cookie_v2` / `token_v2` 会话模型：
 > `POST /api/v1/auths/refresh` 对 JWT 返回 `LEGACY_TOKEN_INVALID`，对纯 cookie 返回 `SESSION_MISSING`；
 > `token_v2` 的令牌则需要通过 `POST /api/v1/auths/signin`（邮箱+密码+验证码）签发。
-> 因此自动化的可行路径是复用 `cmd/token-collector` 已有的 headful 浏览器，在采集时顺带读出
-> `localStorage.getItem('token')` 并落盘，由桥接器定期读取。
+
+#### 自动续期（可选）
+
+站点前端在登录 cookie 有效时会自己刷新 `localStorage.token`。`cmd/zai-token-refresher`
+用持久化 Chromium profile 保留登录态，定期读出该值并原子写入文件；桥接器在启动时和
+401 之后重新读取：
+
+```sh
+cd cmd/zai-token-refresher
+npm install
+npx playwright install chromium
+node index.js                 # 首次：在弹出的窗口里手动登录
+
+# .env
+ZAI_TOKEN_FILE=runtime/zai-token
+```
+
+- `ZAI_TOKEN_FILE` 优先于 `ZAI_TOKEN`；文件缺失、为空、过期或损坏时**不会**覆盖仍有效的值。
+- 401 时只有文件内容确实变化才会重建会话并重试一次，不会凭同一个失效 token 空转。
+- 登录态本身有效期是数天到数周，到期后仍需在窗口中重登一次——无法做到完全无人值守。
+- 无桌面的服务器：`xvfb-run -a node index.js`（浏览器必须 headful，否则会被站点的风控拒绝）。
+
+### 返回 503 怎么办
+
+503 表示**上游暂时不可用**，请求本身没有问题，通常稍后重试即可。桥接器会自动换用目录中的其他模型重试一次，日志里会记录替换过程：
+
+```
+[Model] glm-5.4 is unavailable upstream (Z.AI error: Model is currently at capacity... ) — retrying with x-preview-l
+```
+
+常见的两种情况：
+
+- `MODEL_CONCURRENCY_LIMIT` —— 免费额度下并发会话数超限。桥接器一次只发一个请求，但仍可能撞上网页端同时在用的会话；等几分钟再试。
+- `INTERNAL_ERROR` —— 上游自身的临时故障。实测**线上原样请求**同样会命中，与本桥接器的请求体无关。
+
+如果持续出现，检查并发会话是否堆积在上游（`GET /api/v1/chats` 能看到状态为 `running` 的会话）。
 
 ---
 
@@ -432,6 +489,7 @@ GLM-Free-API-node/
 │   ├── waf.js                  #   WAF 检测与熔断器
 │   ├── ratelimit.js            #   上游 pacing gate
 │   ├── httpClient.js           #   HTTP 客户端与 cookie jar
+│   ├── tokenFile.js            #   ZAI_TOKEN_FILE 热加载（配合自动续期）
 │   ├── util.js                 #   通用工具与签名算法
 │   ├── format.js               #   OpenAI 响应 / 错误封装
 │   └── logger.js               #   日志
@@ -440,6 +498,8 @@ GLM-Free-API-node/
 │   ├── harvest.js              #   浏览器采集 + token 铸造
 │   ├── feilin.js               #   Fielin 纯计算（AES-128-CBC + MD5 封装）
 │   └── README.md
+├── scripts/
+│   └── push-via-api.sh         #   git 传输不稳时经 REST API 推送
 ├── tests/                      # node:test 测试套件
 └── docs/Task/                  # 任务索引与归档
 ```
@@ -454,7 +514,9 @@ npm test
 
 使用 Node 内置的 `node:test` 运行器，覆盖配置解析、鉴权、CORS、SSE 流式输出、工具调用增量、推理内容拆分、请求 ID、Agent shim、Ultra 门控、会话池与复用、token 库热切换、WAF 熔断、限速、视觉上传、联网搜索与 Fielin 黄金向量等。
 
-当前状态：**176 个测试全部通过**（Node v24.15.0）。
+其中 `tests/requestShape.test.js` 把**上游请求契约**钉死：签名算法、浏览器指纹查询参数、v2 消息标识字段、容器字段与验证码场景推导 —— 这些一旦漂移，上游只会回一句没有线索的 `500 Internal Server Error`。`tests/modelResolution.test.js` 与 `tests/upstreamErrors.test.js` 覆盖模型解析，以及上游错误的降级与状态码映射。
+
+当前状态：**207 个测试全部通过**（Node v24.15.0）。
 
 > 测试默认关闭上游限速（`UPSTREAM_MIN_INTERVAL_MS=0`）以保证速度，测试本身不访问真实上游。
 
