@@ -20,22 +20,6 @@ TOKEN=$(printf '%s' "${RAW#go-keyring-base64:}" | base64 -d)
 
 cd "$ROOT"
 
-# Files that differ between the remote head and the working tree.
-BASE=$(curl -sS -m 30 "$API/repos/$REPO/git/refs/heads/main" \
-  -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).object.sha))")
-
-echo "remote head: $BASE"
-
-# Build the file list: everything the local commit(s) touch, taken from git.
-FILES=$(git diff --name-only "$BASE" HEAD -- . || true)
-if [ -z "$FILES" ]; then
-  echo "nothing to push — local tree matches the remote head"
-  exit 0
-fi
-echo "files to push:"
-echo "$FILES" | sed 's/^/  /'
-
 api() { # api <method> <path> [json-body]
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$body" ]; then
@@ -53,11 +37,44 @@ api() { # api <method> <path> [json-body]
 
 json_field() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s)$1??'')}catch{console.log('')}})"; }
 
+# Files that differ between the remote head and the working tree.
+BASE=$(api GET "/repos/$REPO/git/refs/heads/main" | json_field ".object.sha")
+
+echo "remote head: $BASE"
+
+# The local and remote histories are separate (the API rebuilds commits), so
+# the commit ids are not comparable. Compare the TREES instead: the remote
+# head's tree vs the local HEAD's tree.
+REMOTE_TREE=$(api GET "/repos/$REPO/git/commits/$BASE" | json_field ".tree.sha")
+LOCAL_TREE=$(git rev-parse "HEAD^{tree}")
+
+if [ "$REMOTE_TREE" = "$LOCAL_TREE" ]; then
+  echo "nothing to push — local tree matches the remote head"
+  exit 0
+fi
+
+# The remote tree object does not exist locally, so `git diff` cannot walk it.
+# Compare against the last known remote state instead: the files the local
+# commits touched since the last successful push.
+FILES=$(git diff --name-only "origin/main" HEAD -- . 2>/dev/null || true)
+if [ -z "$FILES" ]; then
+  # origin/main may be stale — fall back to the files of the local commits
+  # that are not yet on the remote.
+  FILES=$(git log --format= --name-only "origin/main..HEAD" -- . 2>/dev/null | sort -u | grep -v '^$' || true)
+fi
+if [ -z "$FILES" ]; then
+  echo "nothing to push — local tree matches the remote head"
+  exit 0
+fi
+echo "files to push:"
+echo "$FILES" | sed 's/^/  /'
+
 # --- 1. blobs -------------------------------------------------------------
 ENTRIES=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
-  if git cat-file -e "$BASE:$f" 2>/dev/null; then MODE="100644"; else MODE="100644"; fi
+  MODE=$(git ls-files -s -- "$f" | awk '{print $1}')
+  [ -z "$MODE" ] && MODE="100644"
   SHA=$(node -e '
     const b=require("fs").readFileSync(process.argv[1]).toString("base64");
     process.stdout.write(JSON.stringify({content:b,encoding:"base64"}));

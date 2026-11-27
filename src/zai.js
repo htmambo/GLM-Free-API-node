@@ -48,7 +48,7 @@ import { logInfo, logError, logDebug } from './logger.js';
 import { zaiFetch } from './httpClient.js';
 import { getCaptchaVerifyParam } from './captcha.js';
 import { resolveFeaturesForModel } from './features.js';
-import { modelSupportsReasoningEffort, isValidReasoningEffort, resolveModelID } from './models.js';
+import { modelSupportsReasoningEffort, isValidReasoningEffort, resolveModelID, fetchModelsFromZAI } from './models.js';
 
 // ============================================================================
 // JWT DECODE
@@ -354,11 +354,13 @@ async function doInitializeSession() {
 // opts (Go SendOptions; null/undefined = unset pointer):
 //   { model, webSearch, thinking, imageGen, previewMode, chatID, messages,
 //     clientMessagesRaw, reasoningEffort, files }
-export async function* sendToZAI(prompt, opts = {}) {
-    // An unknown model id comes back from the upstream as a bare "500
-    // Internal Server Error", so resolve it against the live catalogue.
-    const { model } = await resolveModelID(opts.model || '');
-
+// buildFeaturesForModel resolves the feature map for `model` and applies the
+// per-request overrides. It is a function of its own so the capacity
+// fallback can rebuild the same feature set for a different model without
+// losing the caller's overrides.
+//
+// Returns { featuresMap, advancedSearch }.
+export async function buildFeaturesForModel(model, opts = {}) {
     // Resolve features dynamically from per-model state
     // (server defaults + stored user overrides)
     const featuresMap = await resolveFeaturesForModel(model);
@@ -419,6 +421,16 @@ export async function* sendToZAI(prompt, opts = {}) {
     delete featuresMap.think;
     featuresMap.image_generation = false;
 
+    return { featuresMap, advancedSearch };
+}
+
+export async function* sendToZAI(prompt, opts = {}) {
+    // An unknown model id comes back from the upstream as a bare "500
+    // Internal Server Error", so resolve it against the live catalogue.
+    const { model } = await resolveModelID(opts.model || '');
+
+    const { featuresMap, advancedSearch } = await buildFeaturesForModel(model, opts);
+
     const chatID = opts.chatID || session.chatID;
     const messages = opts.messages ?? session.messages;
 
@@ -445,7 +457,48 @@ export async function* sendToZAI(prompt, opts = {}) {
         advancedSearch,
     };
 
-    yield* sendToZAIStream(prompt, resolvedOpts);
+    // ── Capacity / tier fallback ──
+    // A model can be at capacity upstream, or gated behind a paid tier, while
+    // another one in the same catalogue serves the account fine. Both are
+    // conditions on Z.AI's side, so the request is retried with another
+    // model instead of failing outright. The swap is logged so the caller
+    // can see which model actually answered.
+    const clientNamedModel = typeof opts.model === 'string' && opts.model.trim() !== '';
+    let attempts = 0;
+    let activeModel = model;
+    let activeFeatures = featuresMap;
+
+    for (;;) {
+        let capacityFailure = null;
+        const stream = sendToZAIStream(prompt, { ...resolvedOpts, model: activeModel, featuresMap: activeFeatures });
+        for await (const r of stream) {
+            if (r.error && isCapacityError(r.error)) {
+                capacityFailure = r.error;
+                continue; // swallow; decide after the stream ends
+            }
+            yield r;
+            if (r.error) return;
+        }
+
+        if (capacityFailure === null) return;
+
+        attempts++;
+        const alternatives = await fallbackModelsFor(activeModel);
+        // One retry is enough: the catalogue is small and every model of a
+        // deployment shares the same tier rules.
+        if (attempts > 1 || alternatives.length === 0) {
+            yield { chunk: '', fullText: '', reasoning: '', error: capacityFailure };
+            return;
+        }
+
+        const next = alternatives[0];
+        logInfo(
+            `[Model] ${activeModel} is unavailable upstream (${capacityFailure.message.slice(0, 120)}) — ` +
+            `retrying with ${next}` + (clientNamedModel ? ' (client-requested model was substituted)' : ''));
+        activeModel = next;
+        const rebuilt = await buildFeaturesForModel(next, opts);
+        activeFeatures = rebuilt.featuresMap;
+    }
 }
 
 // ensureMessageIDs stamps a UUID on every message that lacks one. The
@@ -656,6 +709,42 @@ async function* sendToZAIStream(prompt, opts) {
     };
 }
 
+// isCapacityError reports whether an upstream error means "this model is
+// not usable for this account right now" — a condition on Z.AI's side, not a
+// fault in the request. Three upstream conditions qualify:
+//
+//   * MODEL_CONCURRENCY_LIMIT — the model is busy; the same request
+//     succeeds minutes later.
+//   * 403 "Model not available for current user level" — the model is
+//     gated behind a paid tier. A free account reaches the Flash model
+//     instead.
+//   * INTERNAL_ERROR — the upstream's own catch-all. It was verified to hit
+//     the untouched production request as well, so it is a server-side fault
+//     rather than a rejected request, and another model often serves.
+//
+// All three arrive in two shapes: as an error inside a HTTP 200 SSE stream
+// and as an HTTP error response, so both message forms are matched.
+export function isCapacityError(err) {
+    const msg = err && typeof err.message === 'string' ? err.message : '';
+    if (msg.includes('MODEL_CONCURRENCY_LIMIT')) return true;
+    if (msg.includes('Model not available for current user level')) return true;
+    if (msg.includes('INTERNAL_ERROR')) return true;
+    return false;
+}
+
+// fallbackModelsFor returns the models that may be tried after the first one
+// reports itself unusable. The Flash model comes first: it is the one every
+// account tier can reach, so a fallback to it is the most likely to succeed.
+export async function fallbackModelsFor(current) {
+    const models = await fetchModelsFromZAI();
+    const ids = models
+        .map((m) => m.id)
+        .filter((id) => typeof id === 'string' && id !== '' && id.toLowerCase() !== String(current).toLowerCase());
+    const flash = ids.find((id) => /^(x-preview-l|glm-5\.3-flash)$/i.test(id));
+    if (flash === undefined) return ids;
+    return [flash, ...ids.filter((id) => id !== flash)];
+}
+
 // extractZAIError inspects a parsed Z.AI SSE payload for an embedded error
 // (Z.AI sometimes returns HTTP 200 with the error inside the JSON body).
 // Returns the human-readable detail string, or '' if no error is present.
@@ -701,6 +790,13 @@ export function statusFromError(errMsg) {
     if (errMsg.includes('403')) return 403;
     if (errMsg.includes('429')) return 429;
     if (errMsg.includes('400')) return 400;
+    // The upstream reports "model at capacity" and transient server faults
+    // with its own code strings. Both are temporary conditions on Z.AI's side
+    // — the very same request succeeds minutes later — so they answer 503
+    // ("service unavailable, retry") instead of 500, which tells clients the
+    // failure is not their fault and is worth retrying.
+    if (errMsg.includes('MODEL_CONCURRENCY_LIMIT')) return 503;
+    if (errMsg.includes('INTERNAL_ERROR')) return 503;
     return 500;
 }
 

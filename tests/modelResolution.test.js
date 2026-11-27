@@ -59,11 +59,13 @@ test('the generic "glm-5" id falls back to a model the upstream serves', async (
     });
 });
 
-test('an omitted model resolves to the newest model the upstream lists', async () => {
+test('an omitted model resolves to a model every tier can reach', async () => {
     await withLiveCatalogue(async () => {
         const r = await resolveModelID('');
-        // The catalogue is newest-first, so the flagship comes first.
-        assert.equal(r.model, 'glm-5.4');
+        // The flagship models are gated behind a paid tier and answer "Model
+        // not available for current user level" on a free account, so the
+        // default is the Flash model.
+        assert.equal(r.model, 'x-preview-l');
         assert.equal(r.resolved, false);
     });
 });

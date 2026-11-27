@@ -117,8 +117,8 @@ export async function getModelCapabilities(modelID) {
 //   1. An exact match (case-insensitive) in the live model list wins.
 //   2. A configured override (ZAI_MODEL) is used when the client did not
 //      name a model, or named one that no longer exists.
-//   3. Otherwise the first model the upstream lists is used — the list is
-//      newest-first, so that is the current flagship.
+//   3. Otherwise the most broadly available model the upstream lists is used
+//      (see defaultModelFor).
 //
 // `resolved` reports whether the client's own request was honoured; a false
 // means the id was substituted and the caller should say so.
@@ -144,9 +144,33 @@ export async function resolveModelID(requested) {
         }
     }
 
-    // 3. Fall back to the newest model the upstream lists.
-    const fallback = ids.length > 0 ? ids[0] : 'glm-5.2';
+    // 3. Fall back to the most broadly available model.
+    const fallback = defaultModelFor(ids);
     return { model: fallback, resolved: false, requested: wanted };
+}
+
+// defaultModelFor picks the model the bridge uses when the client did not
+// name one.
+//
+// It is deliberately NOT the newest entry of the catalogue: the flagship
+// models are gated behind a paid tier, and a free account is answered with
+// "Model not available for current user level" (403) for those. The
+// lightweight Flash model (x-preview-l) is the one that every account can
+// reach, so it is preferred; the remaining ids are the fallback when the
+// catalogue no longer contains it.
+//
+// A caller can pin a different choice with ZAI_MODEL.
+export function defaultModelFor(ids) {
+    const list = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id !== '');
+    if (list.length === 0) return 'x-preview-l';
+
+    // The Flash model is available on every tier.
+    const flash = list.find((id) => /^(x-preview-l|glm-5\.3-flash)$/i.test(id));
+    if (flash !== undefined) return flash;
+
+    // Otherwise the last (oldest) entry of a newest-first catalogue is the
+    // most broadly available one.
+    return list[list.length - 1];
 }
 
 // modelSupportsReasoningEffort returns true only when the model's capabilities
