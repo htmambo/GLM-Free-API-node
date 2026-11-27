@@ -253,10 +253,39 @@ export function generateZaSignature(prompt, token, userID) {
     const signature = hmacSHA256(Buffer.from(wKey), Buffer.from(dataToSign)).toString('hex');
 
     // Go url.Values.Encode(): keys sorted, values query-escaped (space -> '+').
+    //
+    // The web client also ships a full browser-fingerprint set alongside
+    // these. The upstream compares the request against it and answers a
+    // bare "500 Internal Server Error" when the shape does not match, so
+    // the fingerprint fields are reproduced here (see fingerprintParams).
     const params = {
         timestamp,
         requestId,
         user_id: userID,
+        signature_timestamp: timestamp,
+        ...fingerprintParams(token),
+    };
+    const urlParams = Object.keys(params)
+        .sort()
+        .map((k) => `${queryEscape(k)}=${queryEscape(params[k])}`)
+        .join('&');
+
+    return { signature, timestamp, urlParams };
+}
+
+// fingerprintParams reproduces the browser-fingerprint query parameters the
+// z.ai web client sends on /api/v2/chat/completions.
+//
+// The upstream validates the request against this set; a request that is
+// missing them is answered with a bare "500 Internal Server Error" instead
+// of a descriptive error, so the shape has to match the deployed client.
+//
+// Field list taken from the prod web bundle (prod-fe-1.2.x): the client
+// builds them from navigator / window / screen / location, so the values
+// here are the equivalent static ones for the bridge's own fingerprint.
+export function fingerprintParams(token) {
+    const now = new Date();
+    return {
         version: clientVersion,
         platform: 'web',
         token,
@@ -265,16 +294,31 @@ export function generateZaSignature(prompt, token, userID) {
         // header) reads as a spoofed client.
         user_agent: zaiUserAgent,
         language: 'en-US',
+        languages: 'en-US,en',
+        timezone: 'Asia/Shanghai',
+        cookie_enabled: 'true',
+        screen_width: '1920',
+        screen_height: '1080',
         screen_resolution: '1920x1080',
+        viewport_height: '1080',
+        viewport_width: '1920',
         viewport_size: '1920x1080',
-        timezone: 'Europe/Paris',
-        timezone_offset: '-60',
-        signature_timestamp: timestamp,
+        color_depth: '24',
+        pixel_ratio: '1',
+        current_url: 'https://chat.z.ai/chat',
+        pathname: '/chat',
+        search: '',
+        hash: '',
+        host: 'chat.z.ai',
+        hostname: 'chat.z.ai',
+        protocol: 'https:',
+        referrer: 'https://chat.z.ai/',
+        title: 'Z.ai - Advanced AI Chatbot & Agent powered by GLM-5.3-Flash',
+        timezone_offset: '-480',
+        local_time: now.toLocaleString(),
+        utc_time: now.toUTCString(),
+        is_mobile: 'false',
+        is_touch: 'false',
+        max_touch_points: '0',
     };
-    const urlParams = Object.keys(params)
-        .sort()
-        .map((k) => `${queryEscape(k)}=${queryEscape(params[k])}`)
-        .join('&');
-
-    return { signature, timestamp, urlParams };
 }

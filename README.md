@@ -90,13 +90,14 @@ node index.js --tokens 850      # 最多 1500 个
 
 ```sh
 cd ../..                     # 回到仓库根目录
-npm start                    # 等价于 node --env-file-if-exists=.env main.js
+npm start                    # 已内置 .env 加载与库路径（见 package.json）
 ```
 
 或手动指定路径与参数：
 
 ```sh
 node --env-file=.env main.js --db-path cmd/token-collector/tokens.sqlite
+npm start -- --db-path /path/to/other.sqlite   # 覆盖内置的库路径
 ```
 
 看到启动横幅即表示成功：
@@ -470,7 +471,18 @@ npm test
 5. **Ultra 层** —— 已等价移植资产下载、校验、SGLang 启动与客户端，但**未在真实 GPU 环境验证**。
 6. **上游 10 MB 单行上限** —— Go 版 `bufio.Scanner` 的行长保护未在 JS 侧重建（病态上游会直接缓冲）。
 7. **验证码凭证来源** —— 上游 Go 版把阿里云 AccessKey 硬编码在 `config.go` 里；本移植版改为从环境变量读取，仓库中不含任何密钥字面量（GitHub Push Protection 会拦截阿里云 AccessKey 模式）。行为等价，但使用者需自行提供这两个值。
-8. **上游 API 漂移** —— Z.AI 近期的接口演进（会话模式 `token_v2` / `cookie_v2`、客户端版本门槛 ≥ 1.0.91、`x-fe-Version` 随前端构建滚动）已超出上游 Go 版（`3b23a69`）的适配范围。本移植版已跟上其中一部分：启动时抓取当前 `x-fe-Version`、URL 的 `version` 参数可配置、User-Agent 参数与请求头保持一致、验证码场景可按站点切换。**但当前仍可能出现上游返回 `500 Internal Server Error`** —— 这与本移植版的鉴权、验证码逻辑无关，剩余差异集中在请求体结构与站点指纹参数上，需要按上游最新协议继续同步。
+8. **上游 API 漂移** —— Z.AI 近期的接口演进（会话模式 `token_v2` / `cookie_v2`、客户端版本参数、`x-fe-Version` 随前端构建滚动、v2 请求体新增 `current_user_message_id`）已超出上游 Go 版（`3b23a69`）的适配范围。本移植版已按部署中的 prod 构建（`prod-fe-1.2.x`）逐项对齐：
+
+   - 启动时抓取当前 `x-fe-Version`（此前配置了 `ZAI_TOKEN` 时永远抓不到）；
+   - URL 的 `version` 参数与线上客户端一致（`0.0.1`），可用 `ZAI_CLIENT_VERSION` 覆盖；
+   - URL 的 `user_agent` 与 `User-Agent` 请求头保持一致；
+   - 补齐线上客户端发送的 30 项浏览器指纹参数；
+   - 请求体补齐 v2 要求的 `current_user_message_id` / `current_user_message_parent_id`，以及 `params` / `variables` / `extra` / `session_id`；
+   - 请求头补齐 `Accept-Language`。
+
+   签名算法与盐值经与线上客户端逐字节比对确认一致（`HMAC-SHA256(salt, 5min-bucket)` → `HMAC-SHA256(key, sortedPayload|base64(prompt)|timestamp)`），无需改动。请求契约由 `tests/requestShape.test.js` 固定，防止再次漂移。
+
+   > ⚠️ **未解决**：对齐后上游仍可能返回 `500 Internal Server Error`。该错误没有字段名也没有提示，剩余差异集中在验证码参数的有效性上——桥接器用自己的阿里云 AccessKey 现场签发 `captcha_verify_param`，而线上客户端走的是浏览器 SDK；若上游按当前场景校验该参数，需要同步更新采集器所用的场景与 AccessKey。
 
 ---
 

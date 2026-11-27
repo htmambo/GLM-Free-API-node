@@ -39,12 +39,10 @@ export const zaiUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
 
 // clientVersion is the "version" query parameter the web client sends on
-// /api/v2/chat/completions. The upstream rejects requests whose version is
-// below its current minimum (it answers "Your client version (unknown) is
-// outdated. Minimum required: <x>"), so the value has to track the deployed
-// web build. Override it with ZAI_CLIENT_VERSION when the upstream raises
-// the bar again.
-export const clientVersion = (process.env.ZAI_CLIENT_VERSION || '').trim() || '1.0.91';
+// /api/v2/chat/completions. The deployed web client sends "0.0.1" (verified
+// against the prod bundle), so that is the default; override it with
+// ZAI_CLIENT_VERSION if the upstream ever changes it.
+export const clientVersion = (process.env.ZAI_CLIENT_VERSION || '').trim() || '0.0.1';
 
 // Session pool defaults (Go: session_pool.go defaultPoolSize / defaultPoolWait /
 // defaultSessionReuse)

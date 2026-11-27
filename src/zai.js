@@ -97,6 +97,77 @@ export function inspectZaiTokenExpiry(token) {
 }
 
 // ============================================================================
+// CHAT REQUEST BODY (Go: the requestBody literal in sendToZAIStream)
+// ============================================================================
+
+// buildChatRequestBody assembles the JSON body of POST
+// /api/v2/chat/completions.
+//
+// The shape mirrors the z.ai web client (verified against the prod web
+// bundle, prod-fe-1.2.x). Two details are load-bearing:
+//
+//   * `id` — the mainland deployment requires the CURRENT user message's id
+//     at the top level, not only inside each message.
+//   * `current_user_message_id` / `current_user_message_parent_id` — the
+//     v2 endpoint identifies the current user turn by id and points at that
+//     message's own parent. The web client sends both; the upstream answers
+//     a request that omits them with a bare "500 Internal Server Error".
+//
+// Exported so the request contract can be pinned by tests.
+export function buildChatRequestBody({
+    model,
+    chatID,
+    messages,
+    prompt,
+    captchaParam,
+    features,
+    files,
+    advancedSearch,
+}) {
+    const messageList = Array.isArray(messages) ? messages : [];
+
+    const lastUserIdx = messageList.findLastIndex((m) => m && m.role === 'user');
+    const hasUserId = lastUserIdx >= 0 && typeof messageList[lastUserIdx].id === 'string';
+    const currentMessageID = hasUserId ? messageList[lastUserIdx].id : randomUUID();
+
+    const currentUserMessageID = hasUserId ? messageList[lastUserIdx].id : null;
+    const currentUserMessageParentID = lastUserIdx > 0 && typeof messageList[lastUserIdx - 1].id === 'string'
+        ? messageList[lastUserIdx - 1].id
+        : null;
+
+    const body = {
+        model,
+        chat_id: chatID,
+        messages: messageList,
+        signature_prompt: prompt,
+        stream: true,
+        id: currentMessageID,
+        current_user_message_id: currentUserMessageID,
+        current_user_message_parent_id: currentUserMessageParentID,
+        captcha_verify_param: captchaParam,
+        features,
+        // Containers the web client always sends (possibly empty).
+        params: {},
+        variables: {},
+        extra: {},
+        session_id: chatID,
+    };
+
+    // Attach uploaded files (images) only when present — text-only
+    // requests keep the exact body shape they always had.
+    if (files && files.length > 0) {
+        body.files = files;
+    }
+    // Advanced Search is an MCP server, not a feature flag: it sits at
+    // the top level next to captcha_verify_param (issue #42).
+    if (advancedSearch) {
+        body.mcp_servers = ['advanced-search'];
+    }
+
+    return body;
+}
+
+// ============================================================================
 // Z.AI SESSION INITIALIZATION
 // ============================================================================
 
@@ -415,35 +486,16 @@ async function* sendToZAIStream(prompt, opts) {
         featuresPayload.image_generation = false;
         featuresPayload.web_search = false;
 
-        // The mainland deployment requires the CURRENT user message's id at
-        // the top level (`id`), not only inside each message: the web client
-        // sends `id: <current message id>`. Reuse the id stamped on the last
-        // user message so the two agree.
-        const lastUserIdx = messagesField.findLastIndex((m) => m && m.role === 'user');
-        const currentMessageID = lastUserIdx >= 0 && typeof messagesField[lastUserIdx].id === 'string'
-            ? messagesField[lastUserIdx].id
-            : randomUUID();
-
-        const requestBody = {
+        const requestBody = buildChatRequestBody({
             model: opts.model,
-            chat_id: opts.chatID,
+            chatID: opts.chatID,
             messages: messagesField,
-            signature_prompt: prompt,
-            stream: true,
-            id: currentMessageID,
-            captcha_verify_param: captchaParam,
+            prompt,
+            captchaParam,
             features: featuresPayload,
-        };
-        // Attach uploaded files (images) only when present — text-only
-        // requests keep the exact body shape they always had.
-        if (opts.files && opts.files.length > 0) {
-            requestBody.files = opts.files;
-        }
-        // Advanced Search is an MCP server, not a feature flag: it sits at
-        // the top level next to captcha_verify_param (issue #42).
-        if (opts.advancedSearch) {
-            requestBody.mcp_servers = ['advanced-search'];
-        }
+            files: opts.files,
+            advancedSearch: opts.advancedSearch,
+        });
 
         const bodyStr = JSON.stringify(requestBody);
 
@@ -470,6 +522,7 @@ async function* sendToZAIStream(prompt, opts) {
                     'authorization': 'Bearer ' + token,
                     'User-Agent': zaiUserAgent,
                     'content-type': 'application/json',
+                    'Accept-Language': 'en-US',
                     'x-fe-Version': feVersion,
                     'x-region': zaiRegion,
                     'x-signature': signature,
