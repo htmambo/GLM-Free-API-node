@@ -23,13 +23,9 @@
 //   ALIYUN_CAPTCHA_ACCESS_KEY_SECRET   — AccessKey Secret
 //
 // Both are required: the captcha param is signed on every chat request.
-// `run()` in server.js fails fast at startup when they are missing.
-//
-// sceneID is a scene identifier, not a credential — it stays inline, but can
-// be overridden for a different deployment.
+// `run()` in server.js warns at startup when they are missing.
 export const accessKey = (process.env.ALIYUN_CAPTCHA_ACCESS_KEY_ID || '').trim();
 export const secretKey = (process.env.ALIYUN_CAPTCHA_ACCESS_KEY_SECRET || '').trim();
-export const sceneID = (process.env.ALIYUN_CAPTCHA_SCENE_ID || '').trim() || 'didk33e0';
 export const maxTokenRetries = 5;
 
 // Z.AI direct config
@@ -68,6 +64,33 @@ if (envBaseURL !== '') BASE_URL = envBaseURL;
 // zaiRegion is the x-region header value. The international site expects
 // "overseas"; a mainland deployment may expect another value (ZAI_REGION).
 export const zaiRegion = (process.env.ZAI_REGION || '').trim() || 'overseas';
+
+// sceneID is the Aliyun captcha scene. The web client picks it by hostname
+// (verified in the prod bundle):
+//
+//   chat.z.ai                -> "didk33e0"
+//   any other host (zchat.z.ai) -> "xswyjefn"
+//
+// A captcha issued for the wrong scene is rejected by the upstream, which
+// answers with a bare "500 Internal Server Error" and no hint — so the scene
+// follows the deployment instead of being hardcoded. Override it with
+// ALIYUN_CAPTCHA_SCENE_ID.
+export function captchaSceneID() {
+    const override = (process.env.ALIYUN_CAPTCHA_SCENE_ID || '').trim();
+    if (override !== '') return override;
+    return defaultSceneID(BASE_URL);
+}
+
+// defaultSceneID mirrors the web client's hostname rule.
+export function defaultSceneID(baseURL) {
+    let host = '';
+    try {
+        host = new URL(baseURL).hostname;
+    } catch {
+        host = '';
+    }
+    return host === 'chat.z.ai' ? 'didk33e0' : 'xswyjefn';
+}
 
 export function setBaseURL(url) {
     BASE_URL = url;

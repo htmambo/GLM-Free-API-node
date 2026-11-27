@@ -27,7 +27,23 @@ export const MD5_SECRET = 'daye,raolewoba!';
 // tF field for the ap-southeast endpoints.
 export const REGION_PREFIX = 'SG_WEB';
 // Z.AI captcha scene.
-export const SCENE_ID = 'didk33e0';
+//
+// The web client picks the scene by hostname (verified in the prod bundle):
+// chat.z.ai -> "didk33e0", any other host (e.g. zchat.z.ai) -> "xswyjefn".
+// The collector therefore derives it from ZAI_BASE_URL so that a mainland
+// deployment harvests device tokens for the scene it actually uses.
+export const SCENE_ID = (() => {
+    const override = (process.env.ALIYUN_CAPTCHA_SCENE_ID || '').trim();
+    if (override !== '') return override;
+    const base = (process.env.ZAI_BASE_URL || 'https://chat.z.ai').trim().replace(/\/+$/, '');
+    let host = '';
+    try {
+        host = new URL(base).hostname;
+    } catch {
+        host = '';
+    }
+    return host === 'chat.z.ai' ? 'didk33e0' : 'xswyjefn';
+})();
 
 // ---------- AES-128-CBC (PKCS7) ----------
 

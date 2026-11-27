@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 
-import { config, clientVersion, zaiUserAgent, SALT_KEY } from '../src/config.js';
+import { config, clientVersion, zaiUserAgent, SALT_KEY, defaultSceneID } from '../src/config.js';
 import { generateZaSignature, fingerprintParams } from '../src/util.js';
 import { buildChatRequestBody } from '../src/zai.js';
 
@@ -225,4 +225,21 @@ test('body carries mcp_servers only for advanced search', () => {
         buildChatRequestBody({ ...common, advancedSearch: true }).mcp_servers,
         ['advanced-search'],
     );
+});
+
+// ---------------------------------------------------------------------------
+// Captcha scene
+// ---------------------------------------------------------------------------
+
+// The web client picks the captcha scene by hostname (prod bundle):
+//   get SCENE_ID(){ return location.hostname === "chat.z.ai"
+//                        ? "didk33e0" : "xswyjefn" }
+// A captcha issued for the wrong scene is rejected by the upstream with a
+// bare "500 Internal Server Error" — no field name, no hint.
+test('captcha scene follows the deployment hostname', () => {
+    assert.equal(defaultSceneID('https://chat.z.ai'), 'didk33e0');
+    assert.equal(defaultSceneID('https://zchat.z.ai'), 'xswyjefn');
+    assert.equal(defaultSceneID('https://zchat.z.ai/'), 'xswyjefn');
+    // Anything that is not the international host uses the mainland scene.
+    assert.equal(defaultSceneID('https://example.invalid'), 'xswyjefn');
 });

@@ -16,7 +16,7 @@
 
 import { existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
-import { accessKey, secretKey, sceneID, maxTokenRetries } from './config.js';
+import { accessKey, secretKey, captchaSceneID, maxTokenRetries } from './config.js';
 import { config } from './state.js';
 import { withTokenDB, ERR_DB_UNAVAILABLE } from './db.js';
 import { logError, logInfo } from './logger.js';
@@ -108,7 +108,7 @@ export async function initCaptcha() {
         Format: 'JSON',
         Language: 'en',
         Mode: 'popup',
-        SceneId: sceneID,
+        SceneId: captchaSceneID(),
         SignatureMethod: 'HMAC-SHA1',
         SignatureNonce: generateUUID(),
         SignatureVersion: '1.0',
@@ -334,7 +334,7 @@ export async function verifyCaptcha(certifyID, dataValue, deviceToken) {
         certifyId: certifyID,
         data: dataValue,
         deviceToken,
-        sceneId: sceneID,
+        sceneId: captchaSceneID(),
     });
 
     const params = {
@@ -345,7 +345,7 @@ export async function verifyCaptcha(certifyID, dataValue, deviceToken) {
         SignatureVersion: '1.0',
         Timestamp: getTimestampUTC(),
         Version: '2023-03-05',
-        SceneId: sceneID,
+        SceneId: captchaSceneID(),
         CertifyId: certifyID,
         CaptchaVerifyParam: cvpJSON,
         SignatureNonce: generateUUID(),
@@ -378,7 +378,7 @@ export async function verifyCaptcha(certifyID, dataValue, deviceToken) {
             const fpJSON = jsonMarshal({
                 certifyId: ci,
                 isSign: true,
-                sceneId: sceneID,
+                sceneId: captchaSceneID(),
                 securityToken: st,
             });
             return base64Encode(fpJSON);
