@@ -71,6 +71,31 @@ export function decodeJWT(token) {
     return { id, name };
 }
 
+// inspectZaiTokenExpiry returns { exp, expired, secondsLeft } for a Z.AI
+// session token, or null when the token is not a parseable JWT.
+//
+// Z.AI session tokens are short-lived — the web client's token lives about
+// an hour — and an expired one is rejected with a 401 on every chat
+// request. Surfacing that at startup is far cheaper than discovering it
+// through a stream of failed completions.
+export function inspectZaiTokenExpiry(token) {
+    const parts = String(token).split('.');
+    if (parts.length < 2) return null;
+    let data;
+    try {
+        data = JSON.parse(base64Decode(parts[1]).toString('utf8'));
+    } catch {
+        return null;
+    }
+    if (typeof data.exp !== 'number') return null;
+    const now = Math.floor(Date.now() / 1000);
+    return {
+        exp: data.exp,
+        expired: now > data.exp,
+        secondsLeft: data.exp - now,
+    };
+}
+
 // ============================================================================
 // Z.AI SESSION INITIALIZATION
 // ============================================================================
@@ -116,6 +141,13 @@ export function initializeSession() {
 }
 
 async function doInitializeSession() {
+    // Scrape the deployed web build in BOTH paths: the x-fe-Version header
+    // has to match the build the upstream is currently serving, and the
+    // upstream answers a stale version with a bare 500. The guest path used
+    // to do this implicitly, but the ZAI_TOKEN path returned before ever
+    // reaching it — so a configured token pinned the stale default forever.
+    await scrapeConfig();
+
     if (config.zaiToken !== '') {
         logInfo('[Session] Using hardcoded ZAI_TOKEN, skipping guest init.');
         session.token = config.zaiToken;
@@ -131,8 +163,6 @@ async function doInitializeSession() {
     }
 
     logInfo('[Session] Initializing Z.AI session...');
-
-    await scrapeConfig();
 
     const headers = {
         'Origin': BASE_URL,

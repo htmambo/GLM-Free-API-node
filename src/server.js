@@ -52,7 +52,7 @@ import {
 import { anthropicMessagesHandler } from './anthropic.js';
 import { captchaCache } from './captcha.js';
 import { initDB, closeDB } from './db.js';
-import { initializeSession } from './zai.js';
+import { initializeSession, inspectZaiTokenExpiry } from './zai.js';
 import { ensureToolParserLLMForUltra, toolParserLLMSGLangBaseURL } from './toolparserLLM.js';
 import { ultraGateDebug } from './agentUltra.js';
 import { fetchModelsFromZAI } from './models.js';
@@ -281,16 +281,36 @@ export async function run() {
     config.syncMode = args.syncMode;
     config.sessionReuseCount = args.sessionReuseCount;
 
-    // Fail fast on missing captcha credentials: they are read from the
-    // environment (see config.js) and every chat request is signed with
-    // them, so starting without them only defers the failure to the first
-    // request — with a much more confusing error.
+    // Warn (do NOT exit) when the captcha credentials are missing: they are
+    // only needed to sign the captcha param on the chat path, so the rest of
+    // the bridge (health, status, model listing) still works. The chat path
+    // itself fails fast with a clear message at the request boundary — see
+    // getCaptchaVerifyParam() in captcha.js.
     if (accessKey === '' || secretKey === '') {
-        process.stderr.write(
-            'Missing Aliyun captcha credentials!\n' +
-            '  Set ALIYUN_CAPTCHA_ACCESS_KEY_ID and ALIYUN_CAPTCHA_ACCESS_KEY_SECRET.\n' +
-            '  See .env.example for details (copy it to .env and fill in the values).\n');
-        process.exit(1);
+        console.error(
+            '[Startup] WARNING: Aliyun captcha credentials are not configured.\n' +
+            '          Set ALIYUN_CAPTCHA_ACCESS_KEY_ID and ALIYUN_CAPTCHA_ACCESS_KEY_SECRET\n' +
+            '          (see .env.example). Chat requests will fail until they are set;\n' +
+            '          every other endpoint keeps working.');
+    }
+
+    // Warn when the configured ZAI_TOKEN is already expired (or about to
+    // expire). Z.AI session tokens live about an hour, and an expired one
+    // is rejected with a 401 on every chat request — much easier to act on
+    // here than through a stream of failed completions.
+    if (config.zaiToken !== '') {
+        const info = inspectZaiTokenExpiry(config.zaiToken);
+        if (info !== null && info.expired) {
+            console.error(
+                `[Startup] WARNING: ZAI_TOKEN expired at ${new Date(info.exp * 1000).toISOString()} ` +
+                `(${Math.round(-info.secondsLeft / 60)} min ago) — every chat request will fail with 401.\n` +
+                '          Z.AI session tokens are short-lived; refresh it from the site ' +
+                '(devtools -> Application -> Local Storage -> "token") and restart.');
+        } else if (info !== null && info.secondsLeft < 600) {
+            console.error(
+                `[Startup] WARNING: ZAI_TOKEN expires in ~${Math.round(info.secondsLeft / 60)} min ` +
+                `(${new Date(info.exp * 1000).toISOString()}).`);
+        }
     }
 
     if (!existsSync(dbPath)) {

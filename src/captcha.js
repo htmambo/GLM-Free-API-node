@@ -457,6 +457,13 @@ export async function tryCompute(deviceToken) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// captchaCredentialsMissing reports whether the Aliyun signing credentials
+// are absent. Only the chat path needs them; health/status/model listing do
+// not, so a missing pair must not take the whole bridge down.
+export function captchaCredentialsMissing() {
+    return accessKey === '' || secretKey === '';
+}
+
 export class CaptchaCache {
     constructor() {
         this.params = []; // [{ value, generatedAt }]
@@ -490,6 +497,13 @@ export class CaptchaCache {
         await sleep(2000);
 
         while (!signal?.aborted) {
+            // Without credentials there is nothing to generate — skip the
+            // tick entirely instead of retrying (and logging) every 500ms.
+            if (captchaCredentialsMissing()) {
+                await sleep(500);
+                continue;
+            }
+
             // If no activity in the last 3 minutes, pause generation to
             // save tokens
             if (Date.now() - this.lastActive > 3 * 60_000) {
@@ -567,6 +581,18 @@ export async function getCaptchaVerifyParam() {
             return val;
         }
         logInfo('[Captcha Cache] miss - generating synchronously');
+    }
+
+    // The captcha param is signed with the Aliyun AccessKey pair, so without
+    // them the chat path cannot work. Fail here — at the request boundary —
+    // with an actionable message instead of an opaque signature error from
+    // the upstream API. A cached param above never reaches this point: it was
+    // already signed when it was generated.
+    if (captchaCredentialsMissing()) {
+        throw new Error(
+            'Aliyun captcha credentials are not configured: set ' +
+            'ALIYUN_CAPTCHA_ACCESS_KEY_ID and ALIYUN_CAPTCHA_ACCESS_KEY_SECRET ' +
+            '(see .env.example).');
     }
 
     const startedAt = Date.now();

@@ -8,7 +8,7 @@
     "node": ">=22.9.0"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env main.js",
-    "test": "UPSTREAM_MIN_INTERVAL_MS=0 node --test \"tests/**/*.test.js\""
+    "start": "node --env-file-if-exists=.env --db-path=cmd/token-collector/tokens.sqlite main.js",
+    "test": "UPSTREAM_MIN_INTERVAL_MS=0 ALIYUN_CAPTCHA_ACCESS_KEY_ID=test-key ALIYUN_CAPTCHA_ACCESS_KEY_SECRET=test-secret node --test \"tests/**/*.test.js\""
   }
 }

@@ -20,6 +20,7 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { session } from './state.js';
+import { clientVersion, zaiUserAgent } from './config.js';
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -256,10 +257,13 @@ export function generateZaSignature(prompt, token, userID) {
         timestamp,
         requestId,
         user_id: userID,
-        version: '0.0.1',
+        version: clientVersion,
         platform: 'web',
         token,
-        user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        // Must match the User-Agent header: the upstream compares the two
+        // and a mismatch (Chrome/120 in the query vs Chrome/133 in the
+        // header) reads as a spoofed client.
+        user_agent: zaiUserAgent,
         language: 'en-US',
         screen_resolution: '1920x1080',
         viewport_size: '1920x1080',

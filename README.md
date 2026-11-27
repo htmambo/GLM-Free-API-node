@@ -254,6 +254,7 @@ curl -X POST http://localhost:3001/sqlite \
 | `ZAI_BASE_URL` | `https://chat.z.ai` | 上游站点地址。境内部署可设为 `https://zchat.z.ai` |
 | `ZAI_REGION` | `overseas` | `x-region` 请求头取值 |
 | `ZAI_TOKEN` | 空 | **强烈建议配置**：登录用户的 token。游客会话随时可能因上游策略变动而返回 401，配置后可用性与配额都更稳定 |
+| `ZAI_CLIENT_VERSION` | `1.0.91` | 上游 `version` 查询参数。上游会拒绝低于最低版本的请求（报 `Your client version is outdated`），门槛抬高时用这个覆盖 |
 | `UPSTREAM_MIN_INTERVAL_MS` | 随机 `200–500` | 上游请求最小间隔（毫秒）。`0` 关闭限速 |
 | `TOKEN_COUNT_TTL_MS` | `1000` | `/health` 中 token 计数的缓存时长 |
 
@@ -367,6 +368,41 @@ node main.js --agent-mode --agent-mode-variant modern
 
 ---
 
+## 常见问题
+
+### 配了 `.env` 却仍然报错
+
+**`.env` 不会覆盖 shell 里已导出的同名变量。** Node 的 `--env-file` 只补充环境中不存在的键；如果你之前 `export ZAI_TOKEN=...` 过，shell 里的旧值会一直赢。症状是：明明换了新 token，接口还是 401。
+
+```sh
+unset ZAI_TOKEN          # 关键：先清掉 shell 里的旧值
+npm start
+```
+
+排查：
+
+```sh
+node --env-file=.env -e "console.log(process.env.ZAI_TOKEN?.length)"   # 确认读到的是 .env 里的值
+```
+
+### `ZAI_TOKEN` 过期了怎么办
+
+Z.AI 的会话 token 是**约 60 分钟**有效期的 JWT。过期后所有聊天请求都会返回 401。桥接器启动时会解析 token 并在过期（或即将过期）时打印告警：
+
+```
+[Startup] WARNING: ZAI_TOKEN expired at 2026-11-27T07:59:19.000Z (32 min ago) — every chat request will fail with 401.
+```
+
+刷新方式：登录站点 → devtools → Application → Local Storage → 复制 `token` → 更新 `.env` → 重启进程。
+
+> **无法用纯 bearer token 自动续期。** 上游已转向 `cookie_v2` / `token_v2` 会话模型：
+> `POST /api/v1/auths/refresh` 对 JWT 返回 `LEGACY_TOKEN_INVALID`，对纯 cookie 返回 `SESSION_MISSING`；
+> `token_v2` 的令牌则需要通过 `POST /api/v1/auths/signin`（邮箱+密码+验证码）签发。
+> 因此自动化的可行路径是复用 `cmd/token-collector` 已有的 headful 浏览器，在采集时顺带读出
+> `localStorage.getItem('token')` 并落盘，由桥接器定期读取。
+
+---
+
 ## 项目结构
 
 ```
@@ -434,6 +470,7 @@ npm test
 5. **Ultra 层** —— 已等价移植资产下载、校验、SGLang 启动与客户端，但**未在真实 GPU 环境验证**。
 6. **上游 10 MB 单行上限** —— Go 版 `bufio.Scanner` 的行长保护未在 JS 侧重建（病态上游会直接缓冲）。
 7. **验证码凭证来源** —— 上游 Go 版把阿里云 AccessKey 硬编码在 `config.go` 里；本移植版改为从环境变量读取，仓库中不含任何密钥字面量（GitHub Push Protection 会拦截阿里云 AccessKey 模式）。行为等价，但使用者需自行提供这两个值。
+8. **上游 API 漂移** —— Z.AI 近期的接口演进（会话模式 `token_v2` / `cookie_v2`、客户端版本门槛 ≥ 1.0.91、`x-fe-Version` 随前端构建滚动）已超出上游 Go 版（`3b23a69`）的适配范围。本移植版已跟上其中一部分：启动时抓取当前 `x-fe-Version`、URL 的 `version` 参数可配置、User-Agent 参数与请求头保持一致、验证码场景可按站点切换。**但当前仍可能出现上游返回 `500 Internal Server Error`** —— 这与本移植版的鉴权、验证码逻辑无关，剩余差异集中在请求体结构与站点指纹参数上，需要按上游最新协议继续同步。
 
 ---
 
